@@ -1,8 +1,11 @@
 # README
 
+## ToDo
+- Get frontend display ready
+
 ## About
 
-A Wails v2 template for React.
+Application for pitch detection. Backend written with golang. Frontend uses wails to run react for display.
 
 ## Building 
 

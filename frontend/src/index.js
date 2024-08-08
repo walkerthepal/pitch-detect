@@ -5,7 +5,6 @@ import PitchTuningNeedle from './PitchTuningNeedle';
 const App = () => {
   return (
     <div>
-      <h1>Pitch Tuner</h1>
       <PitchTuningNeedle />
     </div>
   );
