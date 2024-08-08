@@ -30,6 +30,7 @@ type App struct {
 	mutex       sync.Mutex
 	stream      *portaudio.Stream
 	pitch       *aubio.Pitch
+	noiseGate   float64
 }
 
 // NewApp creates a new App application struct
@@ -37,6 +38,7 @@ func NewApp() *App {
 	return &App{
 		pitchChan: make(chan float64, 100),
 		closeChan: make(chan struct{}),
+		noiseGate: 0.005, // Default noise gate threshold (adjust as needed)
 	}
 }
 
@@ -47,6 +49,11 @@ func (a *App) startup(ctx context.Context) {
 	if err != nil {
 		fmt.Println("Error initializing PortAudio:", err)
 	}
+}
+
+// domReady is called after the front-end dom has been loaded
+func (a *App) domReady(ctx context.Context) {
+	// Add your action here
 }
 
 // shutdown is called at application termination
@@ -109,21 +116,29 @@ func (a *App) detectPitch() {
 			return
 		}
 		data := make([]float64, len(in))
+
+		// Calculate RMS (Root Mean Square) for volume
+		var sum float64
 		for i, v := range in {
 			data[i] = float64(v)
+			sum += float64(v) * float64(v)
 		}
+		rms := math.Sqrt(sum / float64(len(in)))
 
-		buf := aubio.NewSimpleBufferData(bufSize, data)
-		defer buf.Free()
+		// Apply noise gate
+		if rms > a.noiseGate {
+			buf := aubio.NewSimpleBufferData(bufSize, data)
+			defer buf.Free()
 
-		a.pitch.Do(buf)
-		pitch := a.pitch.Buffer().Slice()[0]
+			a.pitch.Do(buf)
+			pitch := a.pitch.Buffer().Slice()[0]
 
-		if pitch != 0 {
-			select {
-			case a.pitchChan <- pitch:
-			default:
-				// Channel is full, discard the pitch
+			if pitch != 0 {
+				select {
+				case a.pitchChan <- pitch:
+				default:
+					// Channel is full, discard the pitch
+				}
 			}
 		}
 	})
@@ -196,9 +211,4 @@ func (a *App) GetLatestNote() string {
 // GetLatestCents returns the cents off from the latest detected note
 func (a *App) GetLatestCents() float64 {
 	return a.latestCents
-}
-
-// domReady is called after the front-end dom has been loaded
-func (a *App) domReady(ctx context.Context) {
-	// Add your action here
 }
