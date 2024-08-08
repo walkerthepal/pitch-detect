@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/coral/aubio-go"
@@ -25,6 +26,10 @@ type App struct {
 	isDetecting bool
 	latestPitch float64
 	latestNote  string
+	latestCents float64
+	mutex       sync.Mutex
+	stream      *portaudio.Stream
+	pitch       *aubio.Pitch
 }
 
 // NewApp creates a new App application struct
@@ -37,63 +42,72 @@ func NewApp() *App {
 
 // startup is called at application startup
 func (a *App) startup(ctx context.Context) {
-	// Perform your setup here
 	a.ctx = ctx
-}
-
-// domReady is called after the front-end dom has been loaded
-func (a *App) domReady(ctx context.Context) {
-	// Add your action here
+	err := portaudio.Initialize()
+	if err != nil {
+		fmt.Println("Error initializing PortAudio:", err)
+	}
 }
 
 // shutdown is called at application termination
 func (a *App) shutdown(ctx context.Context) {
-	// Perform your teardown here
 	if a.isDetecting {
 		a.StopPitchDetection()
 	}
+	portaudio.Terminate()
 }
 
 // StartPitchDetection starts the pitch detection process
 func (a *App) StartPitchDetection() string {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
 	if a.isDetecting {
 		return "Pitch detection is already running"
 	}
 
+	a.pitch = aubio.NewPitch(aubio.PitchYin, bufSize, bufSize, sampleRate)
 	a.isDetecting = true
+	a.closeChan = make(chan struct{})
 	go a.detectPitch()
 	return "Pitch detection started"
 }
 
 // StopPitchDetection stops the pitch detection process
 func (a *App) StopPitchDetection() string {
+	a.mutex.Lock()
+	defer a.mutex.Unlock()
+
 	if !a.isDetecting {
 		return "Pitch detection is not running"
 	}
 
 	a.isDetecting = false
 	close(a.closeChan)
+	if a.stream != nil {
+		a.stream.Stop()
+		a.stream.Close()
+		a.stream = nil
+	}
+	if a.pitch != nil {
+		a.pitch.Free()
+		a.pitch = nil
+	}
 	return "Pitch detection stopped"
 }
 
-// GetLatestPitch returns the most recent detected pitch
-func (a *App) GetLatestPitch() float64 {
-	return a.latestPitch
-}
-
-// GetLatestNote returns the most recent detected note
-func (a *App) GetLatestNote() string {
-	return a.latestNote
-}
-
 func (a *App) detectPitch() {
-	p := aubio.NewPitch(aubio.PitchYin, bufSize, bufSize, sampleRate)
-	defer p.Free()
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Println("Recovered from panic in detectPitch:", r)
+		}
+	}()
 
-	portaudio.Initialize()
-	defer portaudio.Terminate()
-
-	stream, err := portaudio.OpenDefaultStream(1, 0, float64(sampleRate), bufSize, func(in []float32) {
+	var err error
+	a.stream, err = portaudio.OpenDefaultStream(1, 0, float64(sampleRate), bufSize, func(in []float32) {
+		if a.pitch == nil {
+			return
+		}
 		data := make([]float64, len(in))
 		for i, v := range in {
 			data[i] = float64(v)
@@ -102,11 +116,15 @@ func (a *App) detectPitch() {
 		buf := aubio.NewSimpleBufferData(bufSize, data)
 		defer buf.Free()
 
-		p.Do(buf)
-		pitch := p.Buffer().Slice()[0]
+		a.pitch.Do(buf)
+		pitch := a.pitch.Buffer().Slice()[0]
 
 		if pitch != 0 {
-			a.pitchChan <- pitch
+			select {
+			case a.pitchChan <- pitch:
+			default:
+				// Channel is full, discard the pitch
+			}
 		}
 	})
 
@@ -114,9 +132,8 @@ func (a *App) detectPitch() {
 		fmt.Println("Error opening stream:", err)
 		return
 	}
-	defer stream.Close()
 
-	if err := stream.Start(); err != nil {
+	if err := a.stream.Start(); err != nil {
 		fmt.Println("Error starting stream:", err)
 		return
 	}
@@ -129,11 +146,10 @@ func (a *App) detectPitch() {
 		case pitch := <-a.pitchChan:
 			a.latestPitch = pitch
 			a.latestNote = a.findClosestNote(pitch)
+			a.latestCents = a.calculateCents(pitch, a.latestNote)
 		case <-a.closeChan:
-			stream.Stop()
 			return
 		case <-sigChan:
-			stream.Stop()
 			return
 		}
 	}
@@ -150,4 +166,39 @@ func (a *App) findClosestNote(pitch float64) string {
 		}
 	}
 	return closestNote
+}
+
+func (a *App) calculateCents(pitch float64, note string) float64 {
+	noteFreq := a.getNoteFrequency(note)
+	if noteFreq == 0 {
+		return 0 // Avoid division by zero
+	}
+	return 1200 * math.Log2(pitch/noteFreq)
+}
+
+func (a *App) getNoteFrequency(note string) float64 {
+	if freq, ok := NoteMap[note]; ok {
+		return freq
+	}
+	return 0 // Return 0 if note is not found
+}
+
+// GetLatestPitch returns the most recent detected pitch
+func (a *App) GetLatestPitch() float64 {
+	return a.latestPitch
+}
+
+// GetLatestNote returns the most recent detected note
+func (a *App) GetLatestNote() string {
+	return a.latestNote
+}
+
+// GetLatestCents returns the cents off from the latest detected note
+func (a *App) GetLatestCents() float64 {
+	return a.latestCents
+}
+
+// domReady is called after the front-end dom has been loaded
+func (a *App) domReady(ctx context.Context) {
+	// Add your action here
 }
