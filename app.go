@@ -31,15 +31,24 @@ type App struct {
 	stream      *portaudio.Stream
 	pitch       *aubio.Pitch
 	noiseGate   float64
+	window      []float64 // Hann window
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{
+	app := &App{
 		pitchChan: make(chan float64, 100),
 		closeChan: make(chan struct{}),
-		noiseGate: 0.005, // Default noise gate threshold (adjust as needed)
+		noiseGate: 0.005,
+		window:    make([]float64, bufSize),
 	}
+
+	// Calculate Hann window
+	for i := 0; i < bufSize; i++ {
+		app.window[i] = 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(bufSize-1)))
+	}
+
+	return app
 }
 
 // startup is called at application startup
@@ -127,6 +136,11 @@ func (a *App) detectPitch() {
 
 		// Apply noise gate
 		if rms > a.noiseGate {
+			// Apply windowing
+			for i := 0; i < bufSize; i++ {
+				data[i] *= a.window[i]
+			}
+
 			buf := aubio.NewSimpleBufferData(bufSize, data)
 			defer buf.Free()
 

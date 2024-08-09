@@ -2,12 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StartPitchDetection, StopPitchDetection, GetLatestPitch, GetLatestNote, GetLatestCents } from '../wailsjs/go/main/App';
 
 const PitchTuningNeedle = () => {
-  const [note, setNote] = useState('A4');
+  const [note, setNote] = useState('A');
   const [isDetecting, setIsDetecting] = useState(false);
   const [needleRotation, setNeedleRotation] = useState(0);
+  const [needleColor, setNeedleColor] = useState('red');
   
   const rotationBuffer = useRef([]);
-  const BUFFER_SIZE = 15; // Increased to 20 for smoother movement
+  const BUFFER_SIZE = 16;
+  const inTuneStartTime = useRef(null);
 
   useEffect(() => {
     let intervalId;
@@ -20,25 +22,39 @@ const PitchTuningNeedle = () => {
           GetLatestCents()
         ]);
 
-        setNote(latestNote);
+        const noteWithoutOctave = latestNote.replace(/\d+$/, '');
+        setNote(noteWithoutOctave);
 
-        // Add new rotation to buffer
-        rotationBuffer.current.push(latestCents * 1.8);
+        const clampedCents = Math.max(-50, Math.min(50, latestCents));
+
+        rotationBuffer.current.push(clampedCents * 1.8);
         if (rotationBuffer.current.length > BUFFER_SIZE) {
           rotationBuffer.current.shift();
         }
 
-        // Calculate average rotation
         const averageRotation = rotationBuffer.current.reduce((a, b) => a + b, 0) / rotationBuffer.current.length;
         setNeedleRotation(averageRotation);
+
+        // Check if pitch is within -10 to 10 cents
+        if (Math.abs(clampedCents) <= 10) {
+          if (inTuneStartTime.current === null) {
+            inTuneStartTime.current = Date.now();
+          } else if (Date.now() - inTuneStartTime.current >= 100) {
+            setNeedleColor('green');
+          }
+        } else {
+          inTuneStartTime.current = null;
+          setNeedleColor('red');
+        }
       }
     };
 
     if (isDetecting) {
       intervalId = setInterval(updateTuner, 100);
     } else {
-      // Reset buffer when stopping detection
       rotationBuffer.current = [];
+      inTuneStartTime.current = null;
+      setNeedleColor('red'); // Reset color when not detecting
     }
 
     return () => clearInterval(intervalId);
@@ -58,6 +74,8 @@ const PitchTuningNeedle = () => {
       console.error("Error toggling pitch detection:", error);
     }
   };
+
+  const displayedCents = Math.max(-50, Math.min(50, needleRotation / 1.8));
 
   return (
     <div style={{ 
@@ -110,7 +128,7 @@ const PitchTuningNeedle = () => {
               y1="0"
               x2="0"
               y2="-90"
-              stroke="red"
+              stroke={needleColor}
               strokeWidth="4"
               transform={`rotate(${needleRotation})`}
             />
@@ -118,7 +136,7 @@ const PitchTuningNeedle = () => {
           </svg>
         </div>
         <div style={{ marginTop: '20px', fontSize: '18px' }}>
-          Cents off: {(needleRotation / 1.8).toFixed(2)}
+          Cents off: {displayedCents.toFixed(2)}
         </div>
         <div style={{ marginTop: '40px', display: 'flex', justifyContent: 'center' }}>
           <button
