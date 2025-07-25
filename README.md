@@ -1,7 +1,7 @@
 # README
 
 ## ToDo
-- Get frontend display ready
+- Add a dark mode
 
 ## About
 
@@ -11,6 +11,9 @@ Application for pitch detection. Backend written with golang. Frontend uses wail
 
 To build this project in debug mode, use `wails build`. For production, use `wails build -production`.
 To generate a platform native package, add the `-package` flag.
+
+export CGO_CFLAGS="-I/opt/homebrew/opt/aubio/include"
+export CGO_LDFLAGS="-L/opt/homebrew/opt/aubio/lib -laubio"
 
 ## Live Development
 
